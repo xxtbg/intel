@@ -84,9 +84,14 @@ function Get-NasdaqFirstTrade {
     $info = Invoke-RestMethod -Uri $infoUrl -Headers $headers -TimeoutSec 15
     $pd = $info.data.primaryData
     if ($null -ne $pd -and $pd.lastSalePrice) {
+        # Require real volume. Before the open, Nasdaq posts the $83 IPO price
+        # as a placeholder last sale with volume "N/A" - price alone false-alarms.
+        $volClean = ($pd.volume -replace '[^0-9]', '')
+        $vol = 0.0
+        $hasVolume = [double]::TryParse($volClean, [ref]$vol) -and $vol -gt 0
         $clean = ($pd.lastSalePrice -replace '[^0-9.]', '')
         $price = 0.0
-        if ([double]::TryParse($clean, [ref]$price) -and $price -gt 0) {
+        if ($hasVolume -and [double]::TryParse($clean, [ref]$price) -and $price -gt 0) {
             return $price
         }
     }
