@@ -76,23 +76,31 @@ function Play-AlertSound {
     }
 }
 
-function Get-NasdaqFirstTrade {
-    # Returns the last-sale price (double) once a trade exists, else $null.
+function Get-NasdaqQuote {
+    # Returns a quote object. TradePrice is set only once a REAL trade exists:
+    # before the open, Nasdaq posts the $83 IPO price as a placeholder last
+    # sale with volume "N/A", so a price alone would false-alarm - real
+    # volume > 0 is required.
     $infoUrl   = "https://api.nasdaq.com/api/quote/$Symbol/info?assetclass=stocks"
     $tradesUrl = "https://api.nasdaq.com/api/quote/$Symbol/trades?assetclass=stocks&limit=5"
 
     $info = Invoke-RestMethod -Uri $infoUrl -Headers $headers -TimeoutSec 15
     $pd = $info.data.primaryData
-    if ($null -ne $pd -and $pd.lastSalePrice) {
-        # Require real volume. Before the open, Nasdaq posts the $83 IPO price
-        # as a placeholder last sale with volume "N/A" - price alone false-alarms.
+    $q = [PSCustomObject]@{
+        Bid = $pd.bidPrice; Ask = $pd.askPrice
+        BidSize = $pd.bidSize; AskSize = $pd.askSize
+        LastSale = $pd.lastSalePrice; Volume = $pd.volume
+        TradePrice = $null
+    }
+    if ($pd.lastSalePrice) {
         $volClean = ($pd.volume -replace '[^0-9]', '')
         $vol = 0.0
         $hasVolume = [double]::TryParse($volClean, [ref]$vol) -and $vol -gt 0
         $clean = ($pd.lastSalePrice -replace '[^0-9.]', '')
         $price = 0.0
         if ($hasVolume -and [double]::TryParse($clean, [ref]$price) -and $price -gt 0) {
-            return $price
+            $q.TradePrice = $price
+            return $q
         }
     }
 
@@ -104,11 +112,11 @@ function Get-NasdaqFirstTrade {
             $clean = ($rows[0].price -replace '[^0-9.]', '')
             $price = 0.0
             if ([double]::TryParse($clean, [ref]$price) -and $price -gt 0) {
-                return $price
+                $q.TradePrice = $price
             }
         }
     } catch { }
-    return $null
+    return $q
 }
 
 function Get-YahooFirstTrade {
@@ -135,7 +143,8 @@ $failStreak = 0
 while ($true) {
     $stamp = Get-Date -Format "HH:mm:ss"
     try {
-        $price = Get-NasdaqFirstTrade
+        $quote = Get-NasdaqQuote
+        $price = $quote.TradePrice
         $source = "Nasdaq"
         if ($null -eq $price -and $failStreak -ge 3) {
             $price = Get-YahooFirstTrade
@@ -150,7 +159,7 @@ while ($true) {
             if ($alerted) { Start-Sleep -Seconds $PollSeconds; continue }
             $alerted = $true
         } else {
-            Write-Host "[$stamp] $Symbol - no trade yet."
+            Write-Host "[$stamp] $Symbol  Bid $($quote.Bid) x $($quote.BidSize)  |  Ask $($quote.Ask) x $($quote.AskSize)  |  Last $($quote.LastSale)  |  Vol $($quote.Volume)  - no trade yet"
         }
     } catch {
         $failStreak++
